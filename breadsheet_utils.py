@@ -1,12 +1,46 @@
 import pandas as pd
 from typing import Dict, Optional
+import math
 
 GRAMS_PER_OUNCE = 28.3495
 
+def format_significant_digits(value, sig_digits=3, max_decimal_places=None):
+    """
+    Format number to specified significant digits with smart decimal placement
+    
+    Args:
+        value: Number to format
+        sig_digits: Number of significant digits to preserve
+        max_decimal_places: Maximum number of digits after decimal point (optional)
+        
+    Returns:
+        Formatted string with appropriate precision
+    """
+    if value == 0:
+        return "0"
+    
+    # Calculate number of decimal places needed for significant digits
+    magnitude = math.floor(math.log10(abs(value)))
+    decimal_places = max(0, sig_digits - magnitude - 1)
+    
+    # Apply maximum decimal places limit if specified
+    if max_decimal_places is not None:
+        decimal_places = min(decimal_places, max_decimal_places)
+    
+    # Use commas for large numbers (≥1000)
+    if value >= 1000:
+        return f"{value:,.0f}"
+    # For whole numbers or when decimal_places is 0
+    elif decimal_places <= 0:
+        return f"{value:.0f}"
+    # For numbers needing decimal precision
+    else:
+        return f"{value:.{decimal_places}f}"
+
 DEFAULT_FORMATTER = {
-    'grams': lambda x: f"{x:,.0f}" if x > 10 else f"{x:.2f}",
-    'oz': lambda x: f"{x:,.0f}" if x > 100 else f"{x:.2f}",
-    'baker%': lambda x: f"{x:.0f}" if x > 2 else f"{x:.2f}"
+    'grams': lambda x: format_significant_digits(x, 3),
+    'oz': lambda x: format_significant_digits(x, 3, max_decimal_places=2), 
+    'baker%': lambda x: format_significant_digits(x, 3, max_decimal_places=2),
 }
 
 class RecipeCalculator:
@@ -153,6 +187,7 @@ def create_formula(ingredients_dict: Dict[str, float]) -> pd.DataFrame:
     return pd.DataFrame.from_dict(ingredients_dict, orient='index', columns=["baker%"])
 
 def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: pd.DataFrame = None, 
+                       sponge: pd.DataFrame = None,
                        formatter: Dict = None, title: str = "", steps: str = "") -> pd.DataFrame:
     """
     Format DataFrame and display as markdown
@@ -190,6 +225,15 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
                 poolish_display[col] = poolish_display[col].apply(fmt)
         print("Poolish:\n")
         print(poolish_display.to_markdown())
+        print("\nFinal Dough:\n")
+        
+    if sponge is not None:
+        sponge_display = sponge.copy()
+        for col, fmt in formatter.items():
+            if col in sponge_display.columns:
+                sponge_display[col] = sponge_display[col].apply(fmt)
+        print("sponge:\n")
+        print(sponge_display.to_markdown())
         print("\nFinal Dough:\n")
 
     print(display_formula.to_markdown())
