@@ -62,7 +62,9 @@ class RecipeCalculator:
         self.total_weight = num_loaves * self.loaf_weight
     
     def get_batch_info(self):
-        return f"{self.num_loaves:,.0f} loaves at {self.loaf_weight:,.0f} grams"
+        min_loaf_weight = self.loaf_weight * 0.95
+        max_loaf_weight = self.loaf_weight * 1.05
+        return f"{self.num_loaves:,.0f} loaves at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams"
 
     def print_batch_info(self):
         """Print batch size information"""
@@ -215,7 +217,10 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         print(f"{steps}\n")
 
     print(calc.get_batch_info())
-    formula_total = formula['baker%'].sum()
+    if sponge is None:
+        formula_total = formula['baker%'].sum()
+    else:
+        formula_total = sponge['baker%'].sum() + formula['baker%'].sum()
     print(f"overall formula total = {formula_total:.1f}%\n")
         
     if poolish is not None:
