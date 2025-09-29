@@ -16,7 +16,7 @@ def format_significant_digits(value, sig_digits=3, max_decimal_places=None):
     Returns:
         Formatted string with appropriate precision
     """
-    if value == 0:
+    if abs(value) < 0.001:
         return "0"
     
     # Calculate number of decimal places needed for significant digits
