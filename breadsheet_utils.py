@@ -4,7 +4,7 @@ import math
 
 GRAMS_PER_OUNCE = 28.3495
 
-def format_significant_digits(value, sig_digits=3, max_decimal_places=None):
+def format_significant_digits(value, sig_digits=3):
     """
     Format number to specified significant digits with smart decimal placement
     
@@ -17,30 +17,19 @@ def format_significant_digits(value, sig_digits=3, max_decimal_places=None):
         Formatted string with appropriate precision
     """
     if abs(value) < 0.001:
-        return "0"
-    
-    # Calculate number of decimal places needed for significant digits
-    magnitude = math.floor(math.log10(abs(value)))
-    decimal_places = max(0, sig_digits - magnitude - 1)
-    
-    # Apply maximum decimal places limit if specified
-    if max_decimal_places is not None:
-        decimal_places = min(decimal_places, max_decimal_places)
-    
-    # Use commas for large numbers (≥1000)
-    if value >= 1000:
-        return f"{value:,.0f}"
-    # For whole numbers or when decimal_places is 0
-    elif decimal_places <= 0:
-        return f"{value:.0f}"
-    # For numbers needing decimal precision
+        x=0
     else:
-        return f"{value:.{decimal_places}f}"
+        magnitude = math.floor(math.log10(abs(value)))
+        scale_factor = 10 ** (sig_digits - 1 - magnitude)
+        x = round(value * scale_factor) / scale_factor
+
+    return f"{x:,.{2}f}"
+    
 
 DEFAULT_FORMATTER = {
     'grams': lambda x: format_significant_digits(x, 3),
-    'oz': lambda x: format_significant_digits(x, 3, max_decimal_places=2), 
-    'baker%': lambda x: format_significant_digits(x, 3, max_decimal_places=2),
+    'oz': lambda x: format_significant_digits(x, 3),
+    'baker%': lambda x: format_significant_digits(x, 3)
 }
 
 class RecipeCalculator:
@@ -229,7 +218,7 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
             if col in poolish_display.columns:
                 poolish_display[col] = poolish_display[col].apply(fmt)
         print("Poolish:\n")
-        print(poolish_display.to_markdown())
+        print(poolish_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
         print("\nFinal Dough:\n")
         
     if sponge is not None:
@@ -238,9 +227,7 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
             if col in sponge_display.columns:
                 sponge_display[col] = sponge_display[col].apply(fmt)
         print("sponge:\n")
-        print(sponge_display.to_markdown())
+        print(sponge_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
         print("\nFinal Dough:\n")
 
-    print(display_formula.to_markdown())
-    
-    return display_formula
+    print(display_formula.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
