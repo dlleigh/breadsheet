@@ -7,29 +7,36 @@ GRAMS_PER_OUNCE = 28.3495
 def format_significant_digits(value, sig_digits=3):
     """
     Format number to specified significant digits with smart decimal placement
-    
+
     Args:
         value: Number to format
         sig_digits: Number of significant digits to preserve
         max_decimal_places: Maximum number of digits after decimal point (optional)
-        
+
     Returns:
         Formatted string with appropriate precision
     """
-    if abs(value) < 0.001:
-        x=0
+    if abs(value) < 10 ** (-sig_digits):
+        x = 0
     else:
-        magnitude = math.floor(math.log10(abs(value)))
-        scale_factor = 10 ** (sig_digits - 1 - magnitude)
-        x = round(value * scale_factor) / scale_factor
+        # Get the integer part
+        int_part = int(abs(value))
+
+        # If integer part has sig_digits or more digits, no decimal places needed
+        if int_part >= 10 ** (sig_digits - 1):
+            x = round(value)
+        else:
+            # Otherwise, calculate how many decimal places we need
+            decimal_places = sig_digits - len(str(int_part))
+            x = round(value, decimal_places)
 
     return f"{x:,.{2}f}"
     
 
 DEFAULT_FORMATTER = {
-    'grams': lambda x: format_significant_digits(x, 4),
-    'oz': lambda x: format_significant_digits(x, 4),
-    'baker%': lambda x: format_significant_digits(x, 4)
+    'grams': lambda x: format_significant_digits(x),
+    'oz': lambda x: format_significant_digits(x),
+    'baker%': lambda x: format_significant_digits(x)
 }
 
 class RecipeCalculator:
@@ -210,4 +217,5 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         print(sponge_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
         print("\nFinal Dough:\n")
 
+    display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
     print(display_formula.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
