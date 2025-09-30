@@ -27,9 +27,9 @@ def format_significant_digits(value, sig_digits=3):
     
 
 DEFAULT_FORMATTER = {
-    'grams': lambda x: format_significant_digits(x, 3),
-    'oz': lambda x: format_significant_digits(x, 3),
-    'baker%': lambda x: format_significant_digits(x, 3)
+    'grams': lambda x: format_significant_digits(x, 4),
+    'oz': lambda x: format_significant_digits(x, 4),
+    'baker%': lambda x: format_significant_digits(x, 4)
 }
 
 class RecipeCalculator:
@@ -92,7 +92,7 @@ class PrefermentCalculator(RecipeCalculator):
         Returns:
             Total flour percentage
         """
-        return formula[formula.index.str.contains('flour')]['baker%'].sum()
+        return formula[formula.index.str.contains('flour', case=False)]['baker%'].sum()
     
     def calculate_poolish_recipe(self, formula_df: pd.DataFrame, poolish_df: pd.DataFrame, 
                                  pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -135,35 +135,15 @@ class PrefermentCalculator(RecipeCalculator):
         
         return poolish_result, final_dough
     
-    def calculate_sponge_recipe(self, sponge_df: pd.DataFrame, 
-                              dough_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Calculate sponge and final dough for sponge-based recipes (like bagels)
-        
-        Args:
-            sponge_df: Sponge ingredients and percentages
-            dough_df: Final dough ingredients and percentages
-            
-        Returns:
-            Tuple of (sponge_df_with_weights, final_dough_df_with_weights)
-        """
-        sponge_total = sponge_df['baker%'].sum()
-        dough_total = dough_df['baker%'].sum()
-        
-        # Calculate final dough weight based on total percentages
-        final_dough_weight = self.total_weight * 100 / (dough_total + sponge_total)
-        
-        # Calculate sponge weights
-        sponge_result = sponge_df.copy()
-        sponge_result['grams'] = sponge_result['baker%'] * final_dough_weight / 100
-        sponge_result['oz'] = sponge_result['grams'] / GRAMS_PER_OUNCE
-        
-        # Calculate final dough weights  
-        dough_result = dough_df.copy()
-        dough_result['grams'] = dough_result['baker%'] * final_dough_weight / 100
-        dough_result['oz'] = dough_result['grams'] / GRAMS_PER_OUNCE
-        
-        return sponge_result, dough_result
+    def calculate_sponge_recipe(self, formula_df: pd.DataFrame, sponge_df: pd.DataFrame, 
+                                 pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+
+        sponge_result, final_dough = self.calculate_poolish_recipe(formula_df=formula_df, 
+                                                                    poolish_df=sponge_df, 
+                                                                    pre_fermented_flour_ratio=pre_fermented_flour_ratio)
+
+        final_dough.rename(index={"poolish": "sponge"}, inplace=True)
+        return sponge_result, final_dough    
 
 def create_formula(ingredients_dict: Dict[str, float]) -> pd.DataFrame:
     """
