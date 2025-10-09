@@ -67,6 +67,18 @@ class RecipeCalculator:
         """Print batch size information"""
         print(self.get_batch_info())
         print(f"total weight: {self.total_weight:,.2f} grams")
+
+    def get_flour_pct(self, formula):
+        """
+        Calculate total flour percentage from a formula DataFrame
+        
+        Args:
+            formula: DataFrame with ingredients and baker's percentages
+            
+        Returns:
+            Total flour percentage
+        """
+        return formula[formula.index.str.contains('flour', case=False)]['baker%'].sum()
     
     def calculate_straight_dough(self, formula_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -132,10 +144,6 @@ class RecipeCalculator:
             result_df['oz'] = result_df['grams'] / GRAMS_PER_OUNCE
             return None, result_df
 
-        # Prefermented dough logic
-        if not isinstance(self, PrefermentCalculator):
-            raise TypeError("Prefermented doughs require PrefermentCalculator")
-
         formula_total = formula_df['baker%'].sum()
         preferment_total = preferment_df['baker%'].sum()
 
@@ -167,17 +175,7 @@ class RecipeCalculator:
 class PrefermentCalculator(RecipeCalculator):
     """Calculator for recipes with preferments (poolish, levain, sponge)"""
     
-    def get_flour_pct(self, formula):
-        """
-        Calculate total flour percentage from a formula DataFrame
-        
-        Args:
-            formula: DataFrame with ingredients and baker's percentages
-            
-        Returns:
-            Total flour percentage
-        """
-        return formula[formula.index.str.contains('flour', case=False)]['baker%'].sum()
+
     
     def calculate_poolish_recipe(self, formula_df: pd.DataFrame, poolish_df: pd.DataFrame,
                                  pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -239,9 +237,11 @@ def create_formula(ingredients_dict: Dict[str, float]) -> pd.DataFrame:
     """
     return pd.DataFrame.from_dict(ingredients_dict, orient='index', columns=["baker%"])
 
-def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: pd.DataFrame = None, 
+def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: pd.DataFrame = None,
                        sponge: pd.DataFrame = None,
                        levain: pd.DataFrame = None,
+                       pate_fermentee: pd.DataFrame = None,
+                       desem: pd.DataFrame = None,
                        formatter: Dict = None, title: str = "", steps: str = "") -> pd.DataFrame:
     """
     Format DataFrame and display as markdown
@@ -256,9 +256,14 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
     """
     if formatter is None:
         formatter = DEFAULT_FORMATTER
-    
+
+    # Extract soaker ingredients from formula
+    soaker_mask = formula.index.str.contains('soaker', case=False)
+    soaker_ingredients = formula[soaker_mask].copy()
+    formula_without_soaker = formula[~soaker_mask].copy()
+
     # Create display copy with formatted values
-    display_formula = formula.copy()
+    display_formula = formula_without_soaker.copy()
     for col, fmt in formatter.items():
         if col in display_formula.columns:
             display_formula[col] = display_formula[col].apply(fmt)
@@ -269,11 +274,27 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         print(f"{steps}\n")
 
     print(calc.get_batch_info())
-    if sponge is None:
-        formula_total = formula['baker%'].sum()
+    if sponge is None and pate_fermentee is None and desem is None:
+        formula_total = formula_without_soaker['baker%'].sum()
+    elif sponge is not None:
+        formula_total = sponge['baker%'].sum() + formula_without_soaker['baker%'].sum()
+    elif pate_fermentee is not None:
+        formula_total = pate_fermentee['baker%'].sum() + formula_without_soaker['baker%'].sum()
+    elif desem is not None:
+        formula_total = desem['baker%'].sum() + formula_without_soaker['baker%'].sum()
     else:
-        formula_total = sponge['baker%'].sum() + formula['baker%'].sum()
+        formula_total = formula_without_soaker['baker%'].sum()
     print(f"overall formula total = {formula_total:.1f}%\n")
+
+    # Display soaker ingredients if present
+    if not soaker_ingredients.empty:
+        soaker_display = soaker_ingredients.copy()
+        for col, fmt in formatter.items():
+            if col in soaker_display.columns:
+                soaker_display[col] = soaker_display[col].apply(fmt)
+        print("Soaker:\n")
+        print(soaker_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+        print("\n")
         
     if poolish is not None:
         poolish_display = poolish.copy()
@@ -300,6 +321,24 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
                 levain_display[col] = levain_display[col].apply(fmt)
         print("levain:\n")
         print(levain_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+        print("\nFinal Dough:\n")
+
+    if pate_fermentee is not None:
+        pate_fermentee_display = pate_fermentee.copy()
+        for col, fmt in formatter.items():
+            if col in pate_fermentee_display.columns:
+                pate_fermentee_display[col] = pate_fermentee_display[col].apply(fmt)
+        print("Pâte Fermentée:\n")
+        print(pate_fermentee_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+        print("\nFinal Dough:\n")
+
+    if desem is not None:
+        desem_display = desem.copy()
+        for col, fmt in formatter.items():
+            if col in desem_display.columns:
+                desem_display[col] = desem_display[col].apply(fmt)
+        print("Desem:\n")
+        print(desem_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
         print("\nFinal Dough:\n")
 
     display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
