@@ -3,6 +3,7 @@ from typing import Dict, Optional
 import math
 
 GRAMS_PER_OUNCE = 28.3495
+GRAMS_PER_POUND = GRAMS_PER_OUNCE * 16
 
 def format_significant_digits(value, sig_digits=3):
     """
@@ -171,6 +172,96 @@ class RecipeCalculator:
         final_dough['oz'] = final_dough['grams'] / GRAMS_PER_OUNCE
 
         return preferment_result, final_dough
+
+    def calculate_cost(self, pricing_csv_path: str,
+                       final_dough_df: pd.DataFrame,
+                       preferment_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Calculate ingredient costs for a recipe
+
+        Args:
+            pricing_csv_path: Path to CSV with columns: ingredient, quantity, unit_of_measure, cost
+            final_dough_df: Final dough DataFrame from calculate() with grams column
+            preferment_df: Optional preferment DataFrame from calculate() with grams column
+
+        Returns:
+            DataFrame with columns: ingredient, grams, unit_cost_per_gram, total_cost
+        """
+        # Load pricing data
+        pricing_df = pd.read_csv(pricing_csv_path)
+
+        # Convert all pricing to cost per gram
+        pricing_df['cost_per_gram'] = pricing_df.apply(
+            lambda row: self._convert_to_cost_per_gram(row['cost'], row['quantity'], row['unit_of_measure']),
+            axis=1
+        )
+
+        # Create a lookup dict for ingredient costs (case-insensitive)
+        cost_lookup = {ing.lower(): cost for ing, cost in
+                      zip(pricing_df['ingredient'], pricing_df['cost_per_gram'])}
+
+        # Combine all ingredients from recipe
+        all_ingredients = {}
+
+        # Add preferment ingredients if present
+        if preferment_df is not None:
+            for idx, row in preferment_df.iterrows():
+                ingredient = idx.lower()
+                all_ingredients[ingredient] = all_ingredients.get(ingredient, 0) + row['grams']
+
+        # Add final dough ingredients
+        for idx, row in final_dough_df.iterrows():
+            ingredient = idx.lower()
+            # Skip preferment rows (they're already counted above)
+            if preferment_df is not None and idx in ['poolish', 'sponge', 'levain', 'pâte fermentée', 'desem']:
+                continue
+            all_ingredients[ingredient] = all_ingredients.get(ingredient, 0) + row['grams']
+
+        # Calculate costs
+        cost_data = []
+        for ingredient, grams in all_ingredients.items():
+            if ingredient in cost_lookup:
+                cost_per_gram = cost_lookup[ingredient]
+                total_cost = grams * cost_per_gram
+                cost_data.append({
+                    'ingredient': ingredient,
+                    'grams': grams,
+                    'unit_cost_per_gram': cost_per_gram,
+                    'total_cost': total_cost
+                })
+            else:
+                print(f"Warning: No pricing found for '{ingredient}' - skipping")
+
+        cost_df = pd.DataFrame(cost_data)
+
+        # Add summary rows
+        total_batch_cost = cost_df['total_cost'].sum()
+        per_loaf_cost = total_batch_cost / self.num_loaves
+
+        # Append summary rows directly to avoid concat deprecation warning
+        summary_rows = [
+            {'ingredient': 'TOTAL BATCH', 'grams': float('nan'), 'unit_cost_per_gram': float('nan'), 'total_cost': total_batch_cost},
+            {'ingredient': 'PER LOAF', 'grams': float('nan'), 'unit_cost_per_gram': float('nan'), 'total_cost': per_loaf_cost}
+        ]
+
+        cost_df = pd.DataFrame(cost_data + summary_rows)
+
+        return cost_df
+
+    def _convert_to_cost_per_gram(self, cost: float, quantity: float, unit: str) -> float:
+        """Convert ingredient pricing to cost per gram"""
+        unit = unit.lower().strip()
+
+        if unit in ['gram', 'grams', 'g']:
+            return cost / quantity
+        elif unit in ['ounce', 'ounces', 'oz']:
+            grams = quantity * GRAMS_PER_OUNCE
+            return cost / grams
+        elif unit in ['pound', 'pounds', 'lb', 'lbs']:
+            grams = quantity * GRAMS_PER_POUND
+            return cost / grams
+        else:
+            raise ValueError(f"Unsupported unit of measure: {unit}. Use grams, ounces, or pounds.")
 
 class PrefermentCalculator(RecipeCalculator):
     """Calculator for recipes with preferments (poolish, levain, sponge)"""
@@ -343,3 +434,41 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
 
     display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
     print(display_formula.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+
+def format_and_display_cost(cost_df: pd.DataFrame,
+                            calc: RecipeCalculator,
+                            title: str = "Cost Breakdown") -> pd.DataFrame:
+    """
+    Format and display cost breakdown as markdown
+
+    Args:
+        cost_df: DataFrame from calculate_cost() with cost information
+        calc: RecipeCalculator instance for batch info
+        title: Optional title to print before the table
+
+    Returns:
+        Formatted DataFrame (for display purposes)
+    """
+    display_df = cost_df.copy()
+
+    # Format numeric columns
+    if 'grams' in display_df.columns:
+        display_df['grams'] = display_df['grams'].apply(
+            lambda x: format_significant_digits(x) if pd.notna(x) else ''
+        )
+    if 'unit_cost_per_gram' in display_df.columns:
+        display_df['unit_cost_per_gram'] = display_df['unit_cost_per_gram'].apply(
+            lambda x: f"${x:.6f}" if pd.notna(x) else ''
+        )
+    if 'total_cost' in display_df.columns:
+        display_df['total_cost'] = display_df['total_cost'].apply(
+            lambda x: f"${x:.2f}" if pd.notna(x) else ''
+        )
+
+    if title:
+        print(f"\n{title}\n")
+
+    print(calc.get_batch_info())
+    print()
+
+    print(display_df.to_markdown(index=False, colalign=["left", "right", "right", "right"]))
