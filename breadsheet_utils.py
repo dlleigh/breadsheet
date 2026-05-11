@@ -5,6 +5,14 @@ import math
 GRAMS_PER_OUNCE = 28.3495
 GRAMS_PER_POUND = GRAMS_PER_OUNCE * 16
 
+# Ingredient classification sets (lowercase for case-insensitive matching)
+SEED_CULTURE_NAMES = {'seed', 'starter', 'levain', 'desem'}
+PREFERMENT_NAMES = {'poolish', 'sponge', 'levain', 'pâte fermentée', 'desem', 'biga'}
+
+def _name_matches(index: pd.Index, names: set) -> pd.Series:
+    """Check if index values exactly match any name in the set (case-insensitive)"""
+    return pd.Series(index.str.lower().isin(names), index=index)
+
 def format_significant_digits(value, sig_digits=3):
     """
     Format number to specified significant digits with smart decimal placement
@@ -71,15 +79,29 @@ class RecipeCalculator:
 
     def get_flour_pct(self, formula):
         """
-        Calculate total flour percentage from a formula DataFrame
-        
+        Calculate total flour percentage from a formula DataFrame,
+        including flour contributed by seed/starter ingredients.
+
+        Seed/starter is assumed to have the same flour-to-water ratio
+        as the other ingredients in the formula.
+
         Args:
             formula: DataFrame with ingredients and baker's percentages
-            
+
         Returns:
-            Total flour percentage
+            Total flour percentage (including seed/starter flour contribution)
         """
-        return formula[formula.index.str.contains('flour', case=False)]['baker%'].sum()
+        flour_pct = formula[formula.index.str.contains('flour', case=False)]['baker%'].sum()
+
+        seed_mask = _name_matches(formula.index, SEED_CULTURE_NAMES)
+        seed_pct = formula[seed_mask]['baker%'].sum()
+
+        if seed_pct > 0:
+            non_seed_total = formula[~seed_mask]['baker%'].sum()
+            flour_ratio = flour_pct / non_seed_total
+            flour_pct += seed_pct * flour_ratio
+
+        return flour_pct
     
     def calculate_straight_dough(self, formula_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -165,9 +187,21 @@ class RecipeCalculator:
         final_dough.loc[preferment_name, 'baker%'] = preferment_weight / flour_weight * 100
 
         # Subtract preferment ingredients from final dough
+        # Decompose seed/starter into flour and water components first
+        seed_mask = _name_matches(preferment_result.index, SEED_CULTURE_NAMES)
+        if seed_mask.any():
+            seed_grams = preferment_result[seed_mask]['grams'].sum()
+            non_seed = preferment_result[~seed_mask]
+            # Distribute seed weight proportionally among non-seed ingredients
+            for idx, row in non_seed.iterrows():
+                proportion = row['grams'] / non_seed['grams'].sum()
+                seed_contribution = seed_grams * proportion
+                if idx in final_dough.index:
+                    final_dough.at[idx, 'grams'] -= seed_contribution
+
         for index, row in preferment_result.iterrows():
-            if index in final_dough.index:
-                final_dough.at[index, 'grams'] = final_dough.at[index, 'grams'] - row['grams']
+            if index in final_dough.index and index.lower() not in SEED_CULTURE_NAMES:
+                final_dough.at[index, 'grams'] -= row['grams']
 
         final_dough['oz'] = final_dough['grams'] / GRAMS_PER_OUNCE
 
@@ -328,20 +362,37 @@ def create_formula(ingredients_dict: Dict[str, float]) -> pd.DataFrame:
     """
     return pd.DataFrame.from_dict(ingredients_dict, orient='index', columns=["baker%"])
 
+def _format_table(df: pd.DataFrame, formatter: Dict) -> pd.DataFrame:
+    """Apply formatter to a DataFrame for display"""
+    display = df.copy()
+    for col, fmt in formatter.items():
+        if col in display.columns:
+            display[col] = display[col].apply(fmt)
+    return display
+
+def _print_table(df: pd.DataFrame, formatter: Dict, label: str = ""):
+    """Format and print a DataFrame as a markdown table"""
+    display = _format_table(df, formatter)
+    if label:
+        print(f"{label}:\n")
+    print(display.to_markdown(floatfmt=".2f", colalign=["left", "right", "right", "right"]))
+
 def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: pd.DataFrame = None,
                        sponge: pd.DataFrame = None,
                        levain: pd.DataFrame = None,
                        pate_fermentee: pd.DataFrame = None,
                        desem: pd.DataFrame = None,
-                       formatter: Dict = None, title: str = "", steps: str = "") -> pd.DataFrame:
+                       formatter: Dict = None, title: str = "", steps: str = "",
+                       reserved_seed_grams: float = 0) -> pd.DataFrame:
     """
     Format DataFrame and display as markdown
-    
+
     Args:
         formula: DataFrame to format and display
         formatter: Dictionary of column formatters (uses DEFAULT_FORMATTER if None)
         title: Optional title to print before the table
-        
+        reserved_seed_grams: Extra preferment to make for maintaining starter (display only)
+
     Returns:
         Formatted DataFrame (for display purposes)
     """
@@ -353,87 +404,66 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
     soaker_ingredients = formula[soaker_mask].copy()
     formula_without_soaker = formula[~soaker_mask].copy()
 
-    # Create display copy with formatted values
-    display_formula = formula_without_soaker.copy()
-    for col, fmt in formatter.items():
-        if col in display_formula.columns:
-            display_formula[col] = display_formula[col].apply(fmt)
-
     if title:
         print(f"{title}\n")
     if steps:
         print(f"{steps}\n")
 
     print(calc.get_batch_info())
-    if sponge is None and pate_fermentee is None and desem is None:
-        formula_total = formula_without_soaker['baker%'].sum()
-    elif sponge is not None:
-        formula_total = sponge['baker%'].sum() + formula_without_soaker['baker%'].sum()
-    elif pate_fermentee is not None:
-        formula_total = pate_fermentee['baker%'].sum() + formula_without_soaker['baker%'].sum()
-    elif desem is not None:
-        formula_total = desem['baker%'].sum() + formula_without_soaker['baker%'].sum()
+
+    # Identify preferment
+    preferment_map = {
+        'Poolish': poolish, 'sponge': sponge, 'levain': levain,
+        'Pâte Fermentée': pate_fermentee, 'Desem': desem
+    }
+    preferment_name, preferment = next(
+        ((name, df) for name, df in preferment_map.items() if df is not None),
+        (None, None)
+    )
+
+    # Build and display overall formula when a preferment is present
+    if preferment is not None:
+        final_dough_ingredients = formula_without_soaker[
+            ~formula_without_soaker.index.str.lower().isin(PREFERMENT_NAMES)
+        ].copy()
+        overall = pd.concat([final_dough_ingredients[['grams']], preferment[['grams']]])
+        overall = overall.groupby(overall.index).sum()
+
+        flour_mask = overall.index.str.contains('flour', case=False)
+        total_flour_grams = overall[flour_mask]['grams'].sum()
+        overall['baker%'] = overall['grams'] / total_flour_grams * 100
+        overall['oz'] = overall['grams'] / GRAMS_PER_OUNCE
+
+        # Reorder: flours first, then rest
+        overall = pd.concat([overall[flour_mask], overall[~flour_mask]])
+
+        print(f"overall formula total = {overall['baker%'].sum():.1f}%\n")
+        _print_table(overall[['baker%', 'grams', 'oz']], formatter, "Overall Formula")
+        print()
     else:
-        formula_total = formula_without_soaker['baker%'].sum()
-    print(f"overall formula total = {formula_total:.1f}%\n")
+        print(f"overall formula total = {formula_without_soaker['baker%'].sum():.1f}%\n")
 
     # Display soaker ingredients if present
     if not soaker_ingredients.empty:
-        soaker_display = soaker_ingredients.copy()
-        for col, fmt in formatter.items():
-            if col in soaker_display.columns:
-                soaker_display[col] = soaker_display[col].apply(fmt)
-        print("Soaker:\n")
-        print(soaker_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+        _print_table(soaker_ingredients, formatter, "Soaker")
         print("\n")
-        
-    if poolish is not None:
-        poolish_display = poolish.copy()
-        for col, fmt in formatter.items():
-            if col in poolish_display.columns:
-                poolish_display[col] = poolish_display[col].apply(fmt)
-        print("Poolish:\n")
-        print(poolish_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
-        print("\nFinal Dough:\n")
-        
-    if sponge is not None:
-        sponge_display = sponge.copy()
-        for col, fmt in formatter.items():
-            if col in sponge_display.columns:
-                sponge_display[col] = sponge_display[col].apply(fmt)
-        print("sponge:\n")
-        print(sponge_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
-        print("\nFinal Dough:\n")
 
-    if levain is not None:
-        levain_display = levain.copy()
-        for col, fmt in formatter.items():
-            if col in levain_display.columns:
-                levain_display[col] = levain_display[col].apply(fmt)
-        print("levain:\n")
-        print(levain_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
-        print("\nFinal Dough:\n")
+    # Display preferment (scaled up for reserved seed if needed)
+    if preferment is not None:
+        display_preferment = preferment
+        if reserved_seed_grams > 0:
+            scale = (preferment['grams'].sum() + reserved_seed_grams) / preferment['grams'].sum()
+            display_preferment = preferment.copy()
+            display_preferment['grams'] = preferment['grams'] * scale
+            display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
 
-    if pate_fermentee is not None:
-        pate_fermentee_display = pate_fermentee.copy()
-        for col, fmt in formatter.items():
-            if col in pate_fermentee_display.columns:
-                pate_fermentee_display[col] = pate_fermentee_display[col].apply(fmt)
-        print("Pâte Fermentée:\n")
-        print(pate_fermentee_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
-        print("\nFinal Dough:\n")
+        _print_table(display_preferment, formatter, preferment_name)
+        print(f"\nFinal Dough:\n")
 
-    if desem is not None:
-        desem_display = desem.copy()
-        for col, fmt in formatter.items():
-            if col in desem_display.columns:
-                desem_display[col] = desem_display[col].apply(fmt)
-        print("Desem:\n")
-        print(desem_display.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
-        print("\nFinal Dough:\n")
-
+    # Display final dough (excluding zero-weight rows)
+    display_formula = _format_table(formula_without_soaker, formatter)
     display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
-    print(display_formula.to_markdown(floatfmt=".2f",colalign=["left", "right", "right", "right"]))
+    print(display_formula.to_markdown(floatfmt=".2f", colalign=["left", "right", "right", "right"]))
 
 def format_and_display_cost(cost_df: pd.DataFrame,
                             calc: RecipeCalculator,
