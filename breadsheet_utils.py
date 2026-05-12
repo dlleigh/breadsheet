@@ -297,59 +297,6 @@ class RecipeCalculator:
         else:
             raise ValueError(f"Unsupported unit of measure: {unit}. Use grams, ounces, or pounds.")
 
-class PrefermentCalculator(RecipeCalculator):
-    """Calculator for recipes with preferments (poolish, levain, sponge)"""
-    
-
-    
-    def calculate_poolish_recipe(self, formula_df: pd.DataFrame, poolish_df: pd.DataFrame,
-                                 pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Calculate poolish and final dough for poolish-based recipes
-
-        Args:
-            formula_df: Main recipe formula
-            poolish_df: Poolish ingredients and percentages
-            pre_fermented_flour_ratio: What fraction of total flour goes into poolish (e.g., 0.2 = 20%)
-
-        Returns:
-            Tuple of (poolish_df_with_weights, final_dough_df)
-        """
-        return self.calculate(formula_df, poolish_df=poolish_df,
-                            pre_fermented_flour_ratio=pre_fermented_flour_ratio)
-
-    def calculate_sponge_recipe(self, formula_df: pd.DataFrame, sponge_df: pd.DataFrame,
-                                 pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Calculate sponge and final dough for sponge-based recipes
-
-        Args:
-            formula_df: Main recipe formula
-            sponge_df: Sponge ingredients and percentages
-            pre_fermented_flour_ratio: What fraction of total flour goes into sponge (e.g., 0.2 = 20%)
-
-        Returns:
-            Tuple of (sponge_df_with_weights, final_dough_df)
-        """
-        return self.calculate(formula_df, sponge_df=sponge_df,
-                            pre_fermented_flour_ratio=pre_fermented_flour_ratio)
-
-    def calculate_sourdough_recipe(self, formula_df: pd.DataFrame, levain_df: pd.DataFrame,
-                                 pre_fermented_flour_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Calculate levain and final dough for sourdough recipes
-
-        Args:
-            formula_df: Main recipe formula
-            levain_df: Levain ingredients and percentages
-            pre_fermented_flour_ratio: What fraction of total flour goes into levain (e.g., 0.2 = 20%)
-
-        Returns:
-            Tuple of (levain_df_with_weights, final_dough_df)
-        """
-        return self.calculate(formula_df, levain_df=levain_df,
-                            pre_fermented_flour_ratio=pre_fermented_flour_ratio)
-
 def create_formula(ingredients_dict: Dict[str, float]) -> pd.DataFrame:
     """
     Create DataFrame from ingredients dictionary

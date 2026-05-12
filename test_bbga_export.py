@@ -3,10 +3,10 @@
 
 import sys
 sys.path.append('.')
-from breadsheet_utils import PrefermentCalculator, create_formula, export_bbga_excel
+from breadsheet_utils import RecipeCalculator, create_formula, export_bbga_excel
 
 # Setup bagel recipe
-calc = PrefermentCalculator(
+calc = RecipeCalculator(
     num_loaves=24,
     weight_grams=133)
 
@@ -27,7 +27,7 @@ sponge = create_formula({
 })
 
 # Calculate recipe
-sponge_weights, final_dough = calc.calculate_sponge_recipe(dough, sponge, pre_fermented_flour_ratio)
+sponge_weights, final_dough = calc.calculate(dough, sponge_df=sponge, pre_fermented_flour_ratio=pre_fermented_flour_ratio)
 
 # Export to BBGA Excel format
 export_bbga_excel(

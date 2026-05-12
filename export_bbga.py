@@ -65,13 +65,7 @@ def export_bbga_excel(
     tdw_kg = calc.total_weight / 1000
 
     # Get flour percentage from formula
-    flour_pct = 0
-    # Import here to avoid circular dependency
-    from breadsheet_utils import PrefermentCalculator
-    if isinstance(calc, PrefermentCalculator):
-        flour_pct = calc.get_flour_pct(formula_df)
-    else:
-        flour_pct = formula_df[formula_df.index.str.contains('flour', case=False)]['baker%'].sum()
+    flour_pct = calc.get_flour_pct(formula_df)
 
     # Row 1: Title and TDW header
     current_row = 1
