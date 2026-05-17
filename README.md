@@ -27,6 +27,7 @@ Key points:
 - For prefermented doughs, the preferment's ingredients (flour, water, yeast, etc.) are included in the bread's overall formula. The calculator shows three views: the overall formula, the preferment breakdown, and the final dough (overall minus what went into the preferment). 
 - Note that many breadmaking books do not include preferment components in the overall formula.  Instead, those books list  the preferment in the formula based on its percentage of the flour weight, where the flour of the preferment is *not* included in the total flour weight. This (and the fact that the water in the preferment is not included in the water component of these formulas) makes it more difficult to see the dough's hydration, and results in odd % values for salt and other components.
 - An exception is sourdough seed/starter culture: its flour and water components are *not* included in the overall formula. The seed is treated as a single ingredient with its own baker's percentage. 
+- For dividing, loaf sizes are described in a range from 95%-105% of the desired loaf weight.
 
 ## Limitations
 
