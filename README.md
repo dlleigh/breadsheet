@@ -1,6 +1,36 @@
 # breadsheet
 
+## What is it?
+
 Bread recipe calculators as Jupyter notebooks. Each recipe uses baker's percentages and `breadsheet_utils` to calculate ingredient weights.
+
+## Why?
+
+- I created this repo in 2018 after 10+ years of using spreadsheets to manage my breadmaking formulas. The simple reason was that I hate using spreadsheets, and I love using jupyter notebooks.
+- After several years' experimentation with different approaches, I created the `breadsheet_utils` module in 2025 and standardized the formula calculator and formatter according to [BBGA](https://bbga.org) formula guidelines.
+- My workflow for using these formulas:
+    1. Open the bread's formula in VSCode or (on iPad) on a GitHub Codespace.
+    1. Adjust quantity and run the notebook
+    1. Copy the final output cell and paste into an [Obsidian](https://obsidian.md/) note.
+    1. View the Obsidian note on my phone, and annotate as needed (e.g. scheduling, temperatures, results)
+- I use this repo every time I'm baking - often multiple times per week. 
+- I'm happy if others find it useful, and feedback/suggestions are most welcome, however this is primarily for my own use.
+
+## Approach
+
+The calculations follow the Bread Bakers' Guild of America (BBGA) formula formatting guidelines (2009), available online to BBGA members.
+
+Key points:
+
+- All ingredient quantities are expressed as baker's percentages, where total flour = 100%.
+- A formula's *prefermented flour ratio* determines the quantity of preferment used.
+- For prefermented doughs, the preferment's ingredients (flour, water, yeast, etc.) are included in the bread's overall formula. The calculator shows three views: the overall formula, the preferment breakdown, and the final dough (overall minus what went into the preferment). 
+- Note that many breadmaking books do not include preferment components in the overall formula.  Instead, those books list  the preferment in the formula based on its percentage of the flour weight, where the flour of the preferment is *not* included in the total flour weight. This (and the fact that the water in the preferment is not included in the water component of these formulas) makes it more difficult to see the dough's hydration, and results in odd % values for salt and other components.
+- An exception is sourdough seed/starter culture: its flour and water components are *not* included in the overall formula. The seed is treated as a single ingredient with its own baker's percentage. 
+
+## Limitations
+
+- The calculator currently does not handle formulas which contain multiple types of preferments.
 
 ## Using breadsheet_utils
 
@@ -106,6 +136,10 @@ Final Dough:
 
 `calc.calculate()` supports all preferment types via keyword arguments: `poolish_df`, `sponge_df`, `levain_df`, `pate_fermentee_df`, `desem_df`.
 
+### Weight parameters
+
+You can specify target weight per unit with any of: `weight_grams`, `weight_ounces`, or `weight_pounds`. Add `waste_factor` (e.g., `0.02` for 2%) to account for dough lost during handling.
+
 ### Display options
 
 `format_and_display` accepts optional parameters:
@@ -114,6 +148,20 @@ Final Dough:
 - `steps` — markdown string of instructions, printed before the tables
 - `reserved_seed_grams` — extra grams to add to the preferment display for maintaining a sourdough starter (display only, doesn't affect the dough calculation)
 
-### Weight parameters
+### Cost calculation
 
-You can specify target weight per unit with any of: `weight_grams`, `weight_ounces`, or `weight_pounds`. Add `waste_factor` (e.g., `0.02` for 2%) to account for dough lost during handling.
+`calculate_cost` computes ingredient costs from a pricing CSV file.
+
+```python
+from breadsheet_utils import format_and_display_cost
+
+cost_df = calc.calculate_cost('costs.csv', final_dough)
+format_and_display_cost(cost_df, calc)
+```
+
+The CSV needs columns: `ingredient`, `quantity`, `unit_of_measure`, `cost`. Units can be grams, ounces, or pounds. Ingredient names are matched case-insensitively against the recipe. For prefermented recipes, pass the preferment DataFrame so its ingredients get costed individually (otherwise the lump "poolish" row in `final_dough` has no match in the pricing CSV and gets skipped):
+
+```python
+cost_df = calc.calculate_cost('costs.csv', final_dough, preferment_df=poolish_weights)
+```
+
