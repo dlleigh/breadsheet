@@ -4,10 +4,123 @@ import math
 
 GRAMS_PER_OUNCE = 28.3495
 GRAMS_PER_POUND = GRAMS_PER_OUNCE * 16
+GRAMS_PER_TBSP = 14.787
+GRAMS_PER_TSP = GRAMS_PER_TBSP / 3
+GRAMS_PER_LARGE_EGG = 50
+
+# Grams per cup for common baking ingredients (used for volume column)
+GRAMS_PER_CUP = {
+    'water': 236.6,
+    'oil': 218,
+    'sugar': 200,
+    'brown sugar': 220,
+    'salt': 288,
+    'honey': 340,
+    'milk': 242,
+    'butter': 227,
+    'baking powder': 192,
+    'baking soda': 192,
+    'yeast': 150,
+    'extract': 283,
+    'vanilla': 283,
+    'cocoa': 86,
+    'cinnamon': 125,
+    'almonds': 145,
+}
 
 # Ingredient classification sets (lowercase for case-insensitive matching)
 SEED_CULTURE_NAMES = {'seed', 'starter', 'levain', 'desem'}
 PREFERMENT_NAMES = {'poolish', 'sponge', 'levain', 'pâte fermentée', 'desem', 'biga'}
+
+def _get_grams_per_cup(ingredient_name: str) -> Optional[float]:
+    """
+    Look up grams-per-cup for an ingredient by substring match.
+    Returns None if no match or if the ingredient contains 'flour'.
+    """
+    name = ingredient_name.lower().replace('-', ' ')
+    if 'flour' in name:
+        return None
+    # Try longest key first to prefer 'brown sugar' over 'sugar', etc.
+    for key in sorted(GRAMS_PER_CUP.keys(), key=len, reverse=True):
+        if key in name:
+            return GRAMS_PER_CUP[key]
+    return None
+
+
+def _nearest_fraction(value: float, denominator: int = 8) -> tuple[int, int, int]:
+    """
+    Snap a float to the nearest fraction with the given denominator.
+    Returns (whole, numerator, denominator) where numerator < denominator.
+    """
+    total_parts = round(value * denominator)
+    whole = total_parts // denominator
+    numerator = total_parts % denominator
+    # Simplify the fraction
+    if numerator > 0:
+        from math import gcd
+        g = gcd(numerator, denominator)
+        numerator //= g
+        denominator //= g
+    return whole, numerator, denominator
+
+
+def _format_fraction(value: float, denominator: int = 8) -> str:
+    """Format a float as a fraction string (e.g., '1 3/4', '1/2', '3')."""
+    whole, num, den = _nearest_fraction(value, denominator)
+    if num == 0:
+        return str(whole) if whole > 0 else '0'
+    if whole == 0:
+        return f"{num}/{den}"
+    return f"{whole} {num}/{den}"
+
+
+def _grams_to_volume_str(grams: float, grams_per_cup: float) -> Optional[str]:
+    """
+    Convert grams to a volume string using the most natural unit.
+    Uses the ingredient's density (grams_per_cup) for all unit conversions.
+    Returns None if the result exceeds 1 cup.
+    """
+    cups = grams / grams_per_cup
+    if cups > 1.0:
+        return None
+
+    grams_per_tbsp = grams_per_cup / 16
+    grams_per_tsp = grams_per_cup / 48
+
+    # Try cups (if >= 1/4 cup)
+    if cups >= 0.25:
+        return _format_fraction(cups) + " cup"
+
+    # Try tablespoons (if >= 1/2 tbsp)
+    tbsp = grams / grams_per_tbsp
+    if tbsp >= 0.5:
+        return _format_fraction(tbsp) + " tbsp"
+
+    # Use teaspoons, round to nearest 1/8
+    tsp = grams / grams_per_tsp
+    return _format_fraction(tsp) + " tsp"
+
+
+def _add_volume_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a 'volume' column with human-readable volume measurements."""
+    result = df.copy()
+    volumes = []
+    for ingredient in result.index:
+        name = ingredient.lower().replace('-', ' ')
+        if 'egg' in name:
+            count = round(result.at[ingredient, 'grams'] / GRAMS_PER_LARGE_EGG)
+            label = 'egg' if count == 1 else 'eggs'
+            volumes.append(f"{count} {label}")
+        else:
+            gpc = _get_grams_per_cup(ingredient)
+            if gpc is None:
+                volumes.append('')
+            else:
+                vol_str = _grams_to_volume_str(result.at[ingredient, 'grams'], gpc)
+                volumes.append(vol_str if vol_str else '')
+    result['volume'] = volumes
+    return result
+
 
 def _name_matches(index: pd.Index, names: set) -> pd.Series:
     """Check if index values exactly match any name in the set (case-insensitive)"""
@@ -322,7 +435,8 @@ def _print_table(df: pd.DataFrame, formatter: Dict, label: str = ""):
     display = _format_table(df, formatter)
     if label:
         print(f"{label}:\n")
-    print(display.to_markdown(floatfmt=".2f", colalign=["left", "right", "right", "right"]))
+    colalign = ["left"] + ["right"] * len(display.columns)
+    print(display.to_markdown(floatfmt=".2f", colalign=colalign))
 
 def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: pd.DataFrame = None,
                        sponge: pd.DataFrame = None,
@@ -330,7 +444,8 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
                        pate_fermentee: pd.DataFrame = None,
                        desem: pd.DataFrame = None,
                        formatter: Dict = None, title: str = "", steps: str = "",
-                       reserved_seed_grams: float = 0) -> pd.DataFrame:
+                       reserved_seed_grams: float = 0,
+                       show_volume: bool = False) -> pd.DataFrame:
     """
     Format DataFrame and display as markdown
 
@@ -385,14 +500,20 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         overall = pd.concat([overall[flour_mask], overall[~flour_mask]])
 
         print(f"overall formula total = {overall['baker%'].sum():.1f}%\n")
-        _print_table(overall[['baker%', 'grams', 'oz']], formatter, "Overall Formula")
+        overall_display = overall[['baker%', 'grams', 'oz']]
+        if show_volume:
+            overall_display = _add_volume_column(overall_display)
+        _print_table(overall_display, formatter, "Overall Formula")
         print()
     else:
         print(f"overall formula total = {formula_without_soaker['baker%'].sum():.1f}%\n")
 
     # Display soaker ingredients if present
     if not soaker_ingredients.empty:
-        _print_table(soaker_ingredients, formatter, "Soaker")
+        soaker_display = soaker_ingredients
+        if show_volume:
+            soaker_display = _add_volume_column(soaker_display)
+        _print_table(soaker_display, formatter, "Soaker")
         print("\n")
 
     # Display preferment (scaled up for reserved seed if needed)
@@ -404,13 +525,19 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
             display_preferment['grams'] = preferment['grams'] * scale
             display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
 
+        if show_volume:
+            display_preferment = _add_volume_column(display_preferment)
         _print_table(display_preferment, formatter, preferment_name)
         print(f"\nFinal Dough:\n")
 
     # Display final dough (excluding zero-weight rows)
-    display_formula = _format_table(formula_without_soaker, formatter)
+    final_display = formula_without_soaker
+    if show_volume:
+        final_display = _add_volume_column(final_display)
+    display_formula = _format_table(final_display, formatter)
     display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
-    print(display_formula.to_markdown(floatfmt=".2f", colalign=["left", "right", "right", "right"]))
+    colalign = ["left"] + ["right"] * len(display_formula.columns)
+    print(display_formula.to_markdown(floatfmt=".2f", colalign=colalign))
 
 def format_and_display_cost(cost_df: pd.DataFrame,
                             calc: RecipeCalculator,
