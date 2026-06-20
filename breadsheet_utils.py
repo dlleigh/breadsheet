@@ -164,25 +164,36 @@ DEFAULT_FORMATTER = {
 class RecipeCalculator:
     """Base calculator for all bread recipes"""
     
-    def __init__(self, num_loaves: int, weight_pounds: int = 0, 
+    def __init__(self, num_loaves: int, weight_pounds: int = 0,
                  weight_ounces: float = 0, weight_grams: float = 0,
-                 waste_factor: float = 0.0):
+                 waste_factor: float = 0.0, num_batches: int = 1,
+                 preferment_waste_factor: float = 0.0):
         """
         Initialize recipe calculator
-        
+
         Args:
-            num_loaves: Number of loaves/units to make
+            num_loaves: Number of loaves/units per dough batch
             weight_pounds: Weight per unit in pounds
             weight_ounces: Weight per unit in ounces
             weight_grams: Weight per unit in grams
+            waste_factor: Extra dough fraction for shaping losses (e.g. 0.02 = 2%)
+            num_batches: Number of separate dough mixes sharing one preferment
+            preferment_waste_factor: Extra preferment fraction for bucket losses (e.g. 0.03 = 3%)
         """
         self.num_loaves = num_loaves
+        self.num_batches = num_batches
+        self.preferment_waste_factor = preferment_waste_factor
         self.loaf_weight = (weight_pounds * 16 + weight_ounces) * GRAMS_PER_OUNCE + weight_grams
         self.total_weight = num_loaves * self.loaf_weight * (1 + waste_factor)
     
     def get_batch_info(self):
         min_loaf_weight = self.loaf_weight * 0.95
         max_loaf_weight = self.loaf_weight * 1.05
+        if self.num_batches > 1:
+            total_loaves = self.num_loaves * self.num_batches
+            return (f"{total_loaves:,.0f} loaves in {self.num_batches} "
+                    f"dough batches of {self.num_loaves:,.0f} "
+                    f"at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams")
         return f"{self.num_loaves:,.0f} loaves at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams"
 
     def print_batch_info(self):
@@ -499,6 +510,11 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         # Reorder: flours first, then rest
         overall = pd.concat([overall[flour_mask], overall[~flour_mask]])
 
+        # Scale grams/oz for multi-batch (baker% stays the same)
+        if calc.num_batches > 1:
+            overall['grams'] = overall['grams'] * calc.num_batches
+            overall['oz'] = overall['grams'] / GRAMS_PER_OUNCE
+
         print(f"overall formula total = {overall['baker%'].sum():.1f}%\n")
         overall_display = overall[['baker%', 'grams', 'oz']]
         if show_volume:
@@ -516,19 +532,35 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         _print_table(soaker_display, formatter, "Soaker")
         print("\n")
 
-    # Display preferment (scaled up for reserved seed if needed)
+    # Display preferment (scaled for multi-batch, reserved seed, and waste)
     if preferment is not None:
         display_preferment = preferment
-        if reserved_seed_grams > 0:
-            scale = (preferment['grams'].sum() + reserved_seed_grams) / preferment['grams'].sum()
+        num_batches = calc.num_batches
+        preferment_waste_factor = calc.preferment_waste_factor
+
+        needs_scaling = (num_batches > 1 or reserved_seed_grams > 0
+                         or preferment_waste_factor > 0)
+        if needs_scaling:
+            base_total = preferment['grams'].sum()
+            scaled_total = ((base_total * num_batches + reserved_seed_grams)
+                            * (1 + preferment_waste_factor))
+            scale = scaled_total / base_total
             display_preferment = preferment.copy()
             display_preferment['grams'] = preferment['grams'] * scale
             display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
 
+        preferment_label = preferment_name
+        if num_batches > 1:
+            preferment_label = f"{preferment_name} (all {num_batches} batches)"
+
         if show_volume:
             display_preferment = _add_volume_column(display_preferment)
-        _print_table(display_preferment, formatter, preferment_name)
-        print(f"\nFinal Dough:\n")
+        _print_table(display_preferment, formatter, preferment_label)
+
+        if num_batches > 1:
+            print(f"\nFinal Dough (per batch):\n")
+        else:
+            print(f"\nFinal Dough:\n")
 
     # Display final dough (excluding zero-weight rows)
     final_display = formula_without_soaker
