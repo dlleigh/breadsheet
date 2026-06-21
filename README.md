@@ -137,9 +137,26 @@ Final Dough:
 
 `calc.calculate()` supports all preferment types via keyword arguments: `poolish_df`, `sponge_df`, `levain_df`, `pate_fermentee_df`, `desem_df`.
 
+### Multi-batch dough mixing
+
+When your mixer can only handle a limited number of loaves at a time, pass `num_loaves` as a list of batch sizes. The calculator makes one preferment for all batches and shows separate final dough tables per batch size:
+
+```python
+calc = RecipeCalculator(
+    num_loaves=[16, 16, 8],
+    weight_grams=133,
+    waste_factor=0.02,
+    preferment_waste_factor=0.02)
+```
+
+Output shows:
+- Batch info: `40 loaves in batches of 16, 16, 8 at 126-140 grams`
+- Overall formula and preferment: quantities for all 40 loaves
+- Final dough: one table per unique batch size ("per batch of 16", "per batch of 8")
+
 ### Weight parameters
 
-You can specify target weight per unit with any of: `weight_grams`, `weight_ounces`, or `weight_pounds`. Add `waste_factor` (e.g., `0.02` for 2%) to account for dough lost during handling.
+You can specify target weight per unit with any of: `weight_grams`, `weight_ounces`, or `weight_pounds`. Add `waste_factor` (e.g., `0.02` for 2%) to account for dough lost during handling. Add `preferment_waste_factor` (e.g., `0.02` for 2%) to account for preferment stuck to the mixing vessel.
 
 ### Display options
 

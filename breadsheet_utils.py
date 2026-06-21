@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Union
 import math
 
 GRAMS_PER_OUNCE = 28.3495
@@ -164,36 +164,38 @@ DEFAULT_FORMATTER = {
 class RecipeCalculator:
     """Base calculator for all bread recipes"""
     
-    def __init__(self, num_loaves: int, weight_pounds: int = 0,
+    def __init__(self, num_loaves: Union[int, List[int]], weight_pounds: int = 0,
                  weight_ounces: float = 0, weight_grams: float = 0,
-                 waste_factor: float = 0.0, num_batches: int = 1,
+                 waste_factor: float = 0.0,
                  preferment_waste_factor: float = 0.0):
         """
         Initialize recipe calculator
 
         Args:
-            num_loaves: Number of loaves/units per dough batch
+            num_loaves: Total loaves (int) or list of batch sizes (e.g. [16, 16, 8])
             weight_pounds: Weight per unit in pounds
             weight_ounces: Weight per unit in ounces
             weight_grams: Weight per unit in grams
             waste_factor: Extra dough fraction for shaping losses (e.g. 0.02 = 2%)
-            num_batches: Number of separate dough mixes sharing one preferment
             preferment_waste_factor: Extra preferment fraction for bucket losses (e.g. 0.03 = 3%)
         """
-        self.num_loaves = num_loaves
-        self.num_batches = num_batches
+        if isinstance(num_loaves, list):
+            self.batches = num_loaves
+            self.num_loaves = sum(num_loaves)
+        else:
+            self.batches = None
+            self.num_loaves = num_loaves
         self.preferment_waste_factor = preferment_waste_factor
         self.loaf_weight = (weight_pounds * 16 + weight_ounces) * GRAMS_PER_OUNCE + weight_grams
-        self.total_weight = num_loaves * self.loaf_weight * (1 + waste_factor)
+        self.total_weight = self.num_loaves * self.loaf_weight * (1 + waste_factor)
     
     def get_batch_info(self):
         min_loaf_weight = self.loaf_weight * 0.95
         max_loaf_weight = self.loaf_weight * 1.05
-        if self.num_batches > 1:
-            total_loaves = self.num_loaves * self.num_batches
-            return (f"{total_loaves:,.0f} loaves in {self.num_batches} "
-                    f"dough batches of {self.num_loaves:,.0f} "
-                    f"at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams")
+        if self.batches and len(self.batches) > 1:
+            batch_str = ", ".join(str(b) for b in self.batches)
+            return (f"{self.num_loaves:,.0f} loaves in batches of "
+                    f"{batch_str} at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams")
         return f"{self.num_loaves:,.0f} loaves at {min_loaf_weight:,.0f}-{max_loaf_weight:,.0f} grams"
 
     def print_batch_info(self):
@@ -510,11 +512,6 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         # Reorder: flours first, then rest
         overall = pd.concat([overall[flour_mask], overall[~flour_mask]])
 
-        # Scale grams/oz for multi-batch (baker% stays the same)
-        if calc.num_batches > 1:
-            overall['grams'] = overall['grams'] * calc.num_batches
-            overall['oz'] = overall['grams'] / GRAMS_PER_OUNCE
-
         print(f"overall formula total = {overall['baker%'].sum():.1f}%\n")
         overall_display = overall[['baker%', 'grams', 'oz']]
         if show_volume:
@@ -532,44 +529,54 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         _print_table(soaker_display, formatter, "Soaker")
         print("\n")
 
-    # Display preferment (scaled for multi-batch, reserved seed, and waste)
+    # Display preferment (scaled for reserved seed and waste)
     if preferment is not None:
         display_preferment = preferment
-        num_batches = calc.num_batches
         preferment_waste_factor = calc.preferment_waste_factor
 
-        needs_scaling = (num_batches > 1 or reserved_seed_grams > 0
-                         or preferment_waste_factor > 0)
+        needs_scaling = (reserved_seed_grams > 0 or preferment_waste_factor > 0)
         if needs_scaling:
             base_total = preferment['grams'].sum()
-            scaled_total = ((base_total * num_batches + reserved_seed_grams)
-                            * (1 + preferment_waste_factor))
+            scaled_total = (base_total + reserved_seed_grams) * (1 + preferment_waste_factor)
             scale = scaled_total / base_total
             display_preferment = preferment.copy()
             display_preferment['grams'] = preferment['grams'] * scale
             display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
 
         preferment_label = preferment_name
-        if num_batches > 1:
-            preferment_label = f"{preferment_name} (all {num_batches} batches)"
+        if calc.batches and len(calc.batches) > 1:
+            preferment_label = f"{preferment_name} (all batches)"
 
         if show_volume:
             display_preferment = _add_volume_column(display_preferment)
         _print_table(display_preferment, formatter, preferment_label)
 
-        if num_batches > 1:
-            print(f"\nFinal Dough (per batch):\n")
-        else:
+    # Display final dough
+    if calc.batches and len(calc.batches) > 1:
+        unique_sizes = sorted(set(calc.batches), reverse=True)
+        for size in unique_sizes:
+            scale = size / calc.num_loaves
+            batch_display = formula_without_soaker.copy()
+            batch_display['grams'] = formula_without_soaker['grams'] * scale
+            batch_display['oz'] = batch_display['grams'] / GRAMS_PER_OUNCE
+            print(f"\nFinal Dough (per batch of {size}):\n")
+            bd = batch_display
+            if show_volume:
+                bd = _add_volume_column(bd)
+            display_df = _format_table(bd, formatter)
+            display_df = display_df[display_df['grams'].str.replace(',', '').astype(float) != 0]
+            colalign = ["left"] + ["right"] * len(display_df.columns)
+            print(display_df.to_markdown(floatfmt=".2f", colalign=colalign))
+    else:
+        if preferment is not None:
             print(f"\nFinal Dough:\n")
-
-    # Display final dough (excluding zero-weight rows)
-    final_display = formula_without_soaker
-    if show_volume:
-        final_display = _add_volume_column(final_display)
-    display_formula = _format_table(final_display, formatter)
-    display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
-    colalign = ["left"] + ["right"] * len(display_formula.columns)
-    print(display_formula.to_markdown(floatfmt=".2f", colalign=colalign))
+        final_display = formula_without_soaker
+        if show_volume:
+            final_display = _add_volume_column(final_display)
+        display_formula = _format_table(final_display, formatter)
+        display_formula = display_formula[display_formula['grams'].str.replace(',', '').astype(float) != 0]
+        colalign = ["left"] + ["right"] * len(display_formula.columns)
+        print(display_formula.to_markdown(floatfmt=".2f", colalign=colalign))
 
 def format_and_display_cost(cost_df: pd.DataFrame,
                             calc: RecipeCalculator,
