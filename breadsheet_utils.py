@@ -26,6 +26,7 @@ GRAMS_PER_CUP = {
     'cocoa': 86,
     'cinnamon': 125,
     'almonds': 145,
+    'malt':158
 }
 
 # Ingredient classification sets (lowercase for case-insensitive matching)
@@ -458,7 +459,9 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
                        desem: pd.DataFrame = None,
                        formatter: Dict = None, title: str = "", steps: str = "",
                        reserved_seed_grams: float = 0,
-                       show_volume: bool = False) -> pd.DataFrame:
+                       show_volume: bool = False,
+                       show_overall_formula_amounts: bool = False,
+                       after_divide: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Format DataFrame and display as markdown
 
@@ -479,12 +482,39 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
     soaker_ingredients = formula[soaker_mask].copy()
     formula_without_soaker = formula[~soaker_mask].copy()
 
+    # after_divide items stay in overall formula but are excluded from final dough display.
+    # Because after_divide ingredients are absent from the dough formula, calc.calculate()
+    # distributed total_weight across fewer ingredients, inflating all grams. We scale
+    # everything back down so the totals remain correct.
+    after_divide_scale = 1.0
+    after_divide_grams_per_piece = 0.0
+    if after_divide is not None:
+        dough_formula_total = formula_without_soaker[
+            ~formula_without_soaker.index.str.lower().isin(PREFERMENT_NAMES)
+        ]['baker%'].sum()
+        after_divide_baker_total = after_divide['baker%'].sum()
+        combined_baker_total = dough_formula_total + after_divide_baker_total
+        after_divide_scale = dough_formula_total / combined_baker_total
+        after_divide_grams_per_piece = (
+            after_divide_baker_total * calc.total_weight / combined_baker_total / calc.num_loaves
+        )
+        after_divide_mask = formula_without_soaker.index.isin(after_divide.index)
+        formula_for_final_dough = formula_without_soaker[~after_divide_mask].copy()
+    else:
+        formula_for_final_dough = formula_without_soaker
+
     if title:
         print(f"{title}\n")
     if steps:
         print(f"{steps}\n")
 
     print(calc.get_batch_info())
+
+    if after_divide is not None:
+        min_divide = calc.loaf_weight * 0.95 - after_divide_grams_per_piece
+        max_divide = calc.loaf_weight * 1.05 - after_divide_grams_per_piece
+        names = ", ".join(after_divide.index)
+        print(f"divide weight: {min_divide:.0f}-{max_divide:.0f}g per piece (before adding {names})")
 
     # Identify preferment
     preferment_map = {
@@ -504,18 +534,32 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         overall = pd.concat([final_dough_ingredients[['grams']], preferment[['grams']]])
         overall = overall.groupby(overall.index).sum()
 
+        # Scale down to account for after_divide weight in total_weight
+        overall['grams'] = overall['grams'] * after_divide_scale
+
         flour_mask = overall.index.str.contains('flour', case=False)
         total_flour_grams = overall[flour_mask]['grams'].sum()
         overall['baker%'] = overall['grams'] / total_flour_grams * 100
         overall['oz'] = overall['grams'] / GRAMS_PER_OUNCE
 
+        # Add after_divide items to overall formula
+        if after_divide is not None:
+            after_divide_display = after_divide.copy()
+            after_divide_display['grams'] = after_divide_display['baker%'] / 100 * total_flour_grams
+            after_divide_display['oz'] = after_divide_display['grams'] / GRAMS_PER_OUNCE
+            overall = pd.concat([overall, after_divide_display[['baker%', 'grams', 'oz']]])
+
         # Reorder: flours first, then rest
+        flour_mask = overall.index.str.contains('flour', case=False)
         overall = pd.concat([overall[flour_mask], overall[~flour_mask]])
 
         print(f"overall formula total = {overall['baker%'].sum():.1f}%\n")
-        overall_display = overall[['baker%', 'grams', 'oz']]
-        if show_volume:
-            overall_display = _add_volume_column(overall_display)
+        if show_overall_formula_amounts:
+            overall_display = overall[['baker%', 'grams', 'oz']]
+            if show_volume:
+                overall_display = _add_volume_column(overall_display)
+        else:
+            overall_display = overall[['baker%']]
         _print_table(overall_display, formatter, "Overall Formula")
         print()
     else:
@@ -529,9 +573,9 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         _print_table(soaker_display, formatter, "Soaker")
         print("\n")
 
-    # Display preferment (scaled for reserved seed and waste)
+    # Display preferment (scaled for reserved seed, waste, and after_divide)
     if preferment is not None:
-        display_preferment = preferment
+        display_preferment = preferment.copy()
         preferment_waste_factor = calc.preferment_waste_factor
 
         needs_scaling = (reserved_seed_grams > 0 or preferment_waste_factor > 0)
@@ -539,8 +583,11 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
             base_total = preferment['grams'].sum()
             scaled_total = (base_total + reserved_seed_grams) * (1 + preferment_waste_factor)
             scale = scaled_total / base_total
-            display_preferment = preferment.copy()
             display_preferment['grams'] = preferment['grams'] * scale
+            display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
+
+        if after_divide_scale != 1.0:
+            display_preferment['grams'] = display_preferment['grams'] * after_divide_scale
             display_preferment['oz'] = display_preferment['grams'] / GRAMS_PER_OUNCE
 
         preferment_label = preferment_name
@@ -556,8 +603,8 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
         unique_sizes = sorted(set(calc.batches), reverse=True)
         for size in unique_sizes:
             scale = size / calc.num_loaves
-            batch_display = formula_without_soaker.copy()
-            batch_display['grams'] = formula_without_soaker['grams'] * scale
+            batch_display = formula_for_final_dough.copy()
+            batch_display['grams'] = formula_for_final_dough['grams'] * scale * after_divide_scale
             batch_display['oz'] = batch_display['grams'] / GRAMS_PER_OUNCE
             print(f"\nFinal Dough (per batch of {size}):\n")
             bd = batch_display
@@ -570,7 +617,10 @@ def format_and_display(formula: pd.DataFrame, calc: RecipeCalculator, poolish: p
     else:
         if preferment is not None:
             print(f"\nFinal Dough:\n")
-        final_display = formula_without_soaker
+        final_display = formula_for_final_dough.copy()
+        if after_divide_scale != 1.0:
+            final_display['grams'] = final_display['grams'] * after_divide_scale
+            final_display['oz'] = final_display['grams'] / GRAMS_PER_OUNCE
         if show_volume:
             final_display = _add_volume_column(final_display)
         display_formula = _format_table(final_display, formatter)
